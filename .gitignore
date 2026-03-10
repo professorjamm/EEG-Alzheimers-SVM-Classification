@@ -1,9 +1,6 @@
 # Claude
 .claude/
 
-# Dataset / large research assets
-Dataset/
-
 # Python
 __pycache__/
 *.py[cod]
@@ -26,21 +23,10 @@ env/
 venv/
 ENV/
 
-# Jupyter Notebooks
+# Jupyter
 .ipynb_checkpoints/
 
-# Data files
-*.csv
-*.tsv
-*.h5
-*.hdf5
-*.mat
-*.npy
-*.npz
-*.pkl
-*.pickle
-
-# Model files
+# Model / generated artifacts
 *.joblib
 *.sav
 *.model
