@@ -7,14 +7,14 @@ data_set = pd.read_csv('data.csv')
 
 #Compute means band power per subject.
 #Each subject should have one representative value per band (or per selected channel/region).
-patient_mean = data_set.groupby(['patient','group']).mean().reset_index()
+patient_mean = data_set.groupby(['Subject','Group']).mean(numeric_only=True).reset_index()
 print(patient_mean.head())
 
 #Separate the AD and the control groups
 #first the ad group
-ad_class = patient_mean[patient_mean['class'] == 'AD']
+ad_class = patient_mean[patient_mean['Group'] == 'A']
 #then the control group
-control_class = patient_mean[patient_mean['class'] == 'Control']
+control_class = patient_mean[patient_mean['Group'] == 'C']
 
 #box plot of the Alpha power comparison
 plt.boxplot([ad_class ['Alpha'], control_class['Alpha']], labels=['AD', 'Control'])
