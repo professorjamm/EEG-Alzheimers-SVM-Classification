@@ -12,8 +12,12 @@ cd EEG-Alzheimers-SVM-Classification
 ### 2. Install Python dependencies
 
 ```
-pip install mne pandas scipy matplotlib
+python3 -m pip install -r requirements.txt
 ```
+
+This installs everything needed for:
+- Task 2/Task 3 analysis (`mne`, `pandas`, `scipy`, `matplotlib`)
+- ML pipeline work (`scikit-learn`, `seaborn`)
 
 ### 3. Download the EEG dataset
 
@@ -43,3 +47,17 @@ python task3.py
 ```
 
 generates boxplots and prints t-test results.
+
+### 6. Run ML pipeline scaffold
+
+From the repo root:
+
+```
+python3 ML/main.py
+```
+
+`ML/main.py` reads channel-level data from:
+- `Tasks/data.csv` (default)
+- `data.csv` in repo root (fallback)
+
+and aggregates it to subject-level features before train/test split and scaling.

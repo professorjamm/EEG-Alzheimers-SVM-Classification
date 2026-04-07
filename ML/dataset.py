@@ -1,79 +1,54 @@
+from pathlib import Path
+
 import pandas as pd
-import os
-import mne
 
 
-def preprocess_data():
-  """ Preprocesses the EEG data from the ds004504 dataset. 
-  
-  Returns:
-    subject_level_df (DataFrame): A DataFrame containing the preprocessed EEG data at the subject level.
-  """
-  participants_dir = os.path.join(os.path.dirname(__file__), "..", "Dataset", "ds004504")
-  participants_df = pd.read_csv(os.path.join(participants_dir, "participants.tsv"), sep="\t")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_PATHS = (
+    PROJECT_ROOT / "Tasks" / "data.csv",
+    PROJECT_ROOT / "data.csv",
+)
+REQUIRED_COLUMNS = {"Subject", "Group", "Delta", "Theta", "Alpha", "Beta"}
 
-  p_folder_names = []
 
-  for row in participants_df.itertuples(index=False):
-    p_id = row.participant_id
-    p_group = row.Group
+def _resolve_data_path(data_path=None):
+  """Resolve the CSV location for channel-level EEG band-power data."""
+  if data_path:
+    candidate = Path(data_path).expanduser()
+    if not candidate.is_absolute():
+      candidate = PROJECT_ROOT / candidate
+    if candidate.exists():
+      return candidate
+    raise FileNotFoundError(f"Could not find data.csv at: {candidate}")
 
-    if p_group == "A" or p_group == "C":
-      p_folder_names.append(p_id)
+  for candidate in DEFAULT_DATA_PATHS:
+    if candidate.exists():
+      return candidate
 
-  # Load data from A(Alz) and C(Healthy)
-  data_dir = os.path.join(os.path.dirname(__file__),"..", "Dataset", "ds004504", "derivatives")
-  bands = {"delta":(1,4), "theta":(4,8), "alpha":(8,13), "beta":(13,30)}
-
-  all_data = []
-
-  for sub in os.listdir(data_dir):
-    if sub not in p_folder_names:
-      continue
-
-    sub_path = os.path.join(data_dir, sub, "eeg")
-    eeg_file = [f for f in os.listdir(sub_path) if f.endswith(".set")][0]
-    raw = mne.io.read_raw_eeglab(os.path.join(sub_path, eeg_file), preload=True)
-    raw.pick("eeg")
-    raw.filter(1,40)
-
-    spectrum = raw.compute_psd(
-      method="welch",
-      fmin=1,
-      fmax=40,
-      n_fft=2048
-    )
-
-    psd = spectrum.get_data()
-    freqs = spectrum.freqs
-      
-    # Compute band power
-    band_power = {}
-    for band, (fmin,fmax) in bands.items():
-      idx = (freqs >= fmin) & (freqs <= fmax)
-      band_power[band] = psd[:, idx].mean(axis=1)
-
-    for i in range(len(raw.ch_names)):
-      ch = raw.ch_names[i]
-      d = band_power["delta"][i]
-      t = band_power["theta"][i]
-      a = band_power["alpha"][i]
-      b = band_power["beta"][i]
-      all_data.append([sub, ch, d, t, a, b])
-
-  df = pd.DataFrame(all_data, columns=["Subject","Channel","Delta","Theta","Alpha","Beta"])
-
-  df_final = df.merge(
-    participants_df[["participant_id","Group"]],
-    left_on="Subject",
-    right_on="participant_id"
+  expected = "\n".join(str(path) for path in DEFAULT_DATA_PATHS)
+  raise FileNotFoundError(
+      "Could not locate data.csv. Checked:\n" + expected
   )
 
-  df_final = df_final.drop(columns=["participant_id"])
 
-  subject_level_df = df_final.groupby(['Subject','Group'])[
-      ['Delta','Theta','Alpha','Beta']
-  ].mean().reset_index()
+def preprocess_data(data_path=None):
+  """Load channel-level data.csv and aggregate it to one row per subject."""
+  csv_path = _resolve_data_path(data_path)
+  channel_level_df = pd.read_csv(csv_path)
+
+  missing_columns = REQUIRED_COLUMNS.difference(channel_level_df.columns)
+  if missing_columns:
+    missing = ", ".join(sorted(missing_columns))
+    raise ValueError(f"data.csv is missing required columns: {missing}")
+
+  subject_level_df = (
+      channel_level_df.groupby(["Subject", "Group"], as_index=False)[
+          ["Delta", "Theta", "Alpha", "Beta"]
+      ]
+      .mean()
+      .sort_values("Subject")
+      .reset_index(drop=True)
+  )
 
   return subject_level_df
   
