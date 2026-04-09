@@ -1,4 +1,5 @@
 from dataset import preprocess_data
+from model import SVMModel
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
@@ -37,6 +38,13 @@ def main():
 
     print("\nTest groups:")
     print(y_test.value_counts())
+
+    # Initialize the base linear SVM model
+    model = SVMModel()
+    model.train(X_train, y_train)
+
+    results = model.evaluate(X_test, y_test)
+    print(results["report"])
 
 
 if __name__ == "__main__":
