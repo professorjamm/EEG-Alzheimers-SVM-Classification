@@ -66,25 +66,24 @@ def save_metrics_bar_chart(report_dict, output_path):
 
 
 def main():
-    # Make a folder for the saved plots
     RESULTS_DIR.mkdir(exist_ok=True)
 
-    # Load the cleaned subject-level data
+    # Load processed dataset
     preprocessed_df = preprocess_data()
 
-    # EEG band features
+    # Features (EEG bands)
     X = preprocessed_df[["Delta", "Theta", "Alpha", "Beta"]]
 
-    # Labels: A = Alzheimer's, C = Control
+    # Labels (A = Alzheimer's, C = Control)
     y = preprocessed_df["Group"]
 
-    # 5-fold stratified cross-validation
+    # Stratified K-Fold
     skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
     fold_accuracies = []
     fold_ad_sensitivities = []
 
-    # Keep track of every true label and prediction
+    # Store all predictions across folds for final plots
     all_y_true = []
     all_y_pred = []
 
@@ -92,11 +91,12 @@ def main():
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-        # Scale the features for this fold
+        # Scale features
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)
 
+        # Print shapes and class counts
         print(f"\n=== Fold {fold} ===")
         print("Full dataset shape:", preprocessed_df.shape)
         print("Training shape:", X_train_scaled.shape)
@@ -108,12 +108,12 @@ def main():
         print("\nTest groups:")
         print(y_test.value_counts())
 
-        # Train the base linear SVM
+        # Initialize and train base linear SVM model
         model = SVMModel()
         model.train(X_train_scaled, y_train)
         y_pred = model.predict(X_test_scaled)
 
-        # Evaluation for this fold
+        # Person C: full evaluation
         accuracy = np.mean(y_pred == y_test)
         cm = confusion_matrix(y_test, y_pred, labels=LABELS)
         report = classification_report(
@@ -135,11 +135,9 @@ def main():
         fold_accuracies.append(accuracy)
         fold_ad_sensitivities.append(ad_sensitivity)
 
-        # Save fold predictions for the final plots
         all_y_true.extend(y_test.tolist())
         all_y_pred.extend(y_pred.tolist())
 
-    # Use all fold predictions for the final confusion matrix and metrics
     overall_cm = confusion_matrix(all_y_true, all_y_pred, labels=LABELS)
     overall_report_text = classification_report(
         all_y_true,
@@ -157,7 +155,6 @@ def main():
         output_dict=True,
     )
 
-    # Save the Week 2 plots
     cm_plot_path = RESULTS_DIR / "confusion_matrix_heatmap.png"
     metrics_plot_path = RESULTS_DIR / "classification_metrics_bar_chart.png"
 
