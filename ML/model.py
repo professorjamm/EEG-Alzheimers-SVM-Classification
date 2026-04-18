@@ -3,19 +3,20 @@ from sklearn.metrics import accuracy_score, classification_report
 
 
 class SVMModel:
-  def __init__(self, kernel='linear',C=1.0, gamma='scale', random_state=42):
+  def __init__(self, kernel='linear',C=1.0, gamma='scale', degree=3, random_state=42):
     self.model = SVC(
       kernel=kernel,
       C=C,
       gamma=gamma,
+      degree=degree,
       random_state=random_state
     )
 
   def train(self, X_train, y_train):
-    self.model.fit(X_train, y_train)
+      self.model.fit(X_train, y_train)
 
   def predict(self, X_test):
-    return self.model.predict(X_test)
+      return self.model.predict(X_test)
 
   def evaluate(self, X_test, y_test):
       """

@@ -42,3 +42,4 @@ ENV/
 Thumbs.db
 
 Dataset/
+results/
