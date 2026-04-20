@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -15,6 +16,119 @@ RESULTS_DIR = Path(__file__).resolve().parent / "results"
 LABELS = ["A", "C"]
 TARGET_NAMES = ["AD", "Control"]
 
+
+def run_feature_subset_experiments(subject_df, output_dir):
+    """
+    Week 3 Person C:
+    Compare feature subsets (Alpha only, Alpha+Delta, All Bands) with CV.
+    """
+    feature_subsets = {
+        "alpha_only": ["Alpha"],
+        "alpha_delta": ["Alpha", "Delta"],
+        "all_bands": ["Delta", "Theta", "Alpha", "Beta"],
+    }
+
+    output_dir.mkdir(exist_ok=True)
+    summary_rows = []
+
+    for subset_name, feature_columns in feature_subsets.items():
+        subset_dir = output_dir / subset_name
+        subset_dir.mkdir(exist_ok=True)
+
+        X = subject_df[feature_columns]
+        y = subject_df["Group"]
+
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        fold_accuracies = []
+        fold_ad_sensitivities = []
+        all_y_true = []
+        all_y_pred = []
+
+        for train_idx, test_idx in skf.split(X, y):
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
+
+            model = SVMModel(kernel="linear")
+            model.train(X_train_scaled, y_train)
+            y_pred = model.predict(X_test_scaled)
+
+            accuracy = np.mean(y_pred == y_test)
+            ad_sensitivity = recall_score(y_test, y_pred, pos_label="A", zero_division=0)
+
+            fold_accuracies.append(accuracy)
+            fold_ad_sensitivities.append(ad_sensitivity)
+            all_y_true.extend(y_test.tolist())
+            all_y_pred.extend(y_pred.tolist())
+
+        overall_cm = confusion_matrix(all_y_true, all_y_pred, labels=LABELS)
+        overall_report_text = classification_report(
+            all_y_true,
+            all_y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+        )
+        overall_report_dict = classification_report(
+            all_y_true,
+            all_y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+            output_dict=True,
+        )
+
+        cm_plot_path = subset_dir / "confusion_matrix_heatmap.png"
+        metrics_plot_path = subset_dir / "classification_metrics_bar_chart.png"
+        classification_report_path = subset_dir / "classification_report.txt"
+        params_path = subset_dir / "model_params.txt"
+
+        save_confusion_matrix_heatmap(overall_cm, cm_plot_path)
+        save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
+        with open(classification_report_path, "w") as f:
+            f.write(overall_report_text)
+        with open(params_path, "w") as f:
+            f.write("Kernel: linear\n")
+            f.write(f"Features: {', '.join(feature_columns)}\n")
+
+        mean_accuracy = float(np.mean(fold_accuracies))
+        mean_ad_sensitivity = float(np.mean(fold_ad_sensitivities))
+
+        summary_rows.append(
+            {
+                "subset": subset_name,
+                "features": ", ".join(feature_columns),
+                "mean_accuracy": round(mean_accuracy, 4),
+                "mean_ad_sensitivity": round(mean_ad_sensitivity, 4),
+                "ad_precision": round(overall_report_dict["AD"]["precision"], 4),
+                "ad_recall": round(overall_report_dict["AD"]["recall"], 4),
+                "ad_f1": round(overall_report_dict["AD"]["f1-score"], 4),
+                "control_precision": round(overall_report_dict["Control"]["precision"], 4),
+                "control_recall": round(overall_report_dict["Control"]["recall"], 4),
+                "control_f1": round(overall_report_dict["Control"]["f1-score"], 4),
+            }
+        )
+
+        print(f"\n[Person C] Feature subset: {subset_name}")
+        print("Features:", feature_columns)
+        print("Mean Accuracy:", round(mean_accuracy, 4))
+        print("Mean AD Sensitivity:", round(mean_ad_sensitivity, 4))
+        print("Saved:", cm_plot_path)
+        print("Saved:", metrics_plot_path)
+        print("Saved:", classification_report_path)
+
+    summary_rows.sort(key=lambda row: row["mean_accuracy"], reverse=True)
+    summary_path = output_dir / "feature_subset_comparison.csv"
+    with open(summary_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(summary_rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(summary_rows)
+
+    print("\n[Person C] Feature subset comparison saved:", summary_path)
+    print("[Person C] Best subset by mean accuracy:", summary_rows[0]["subset"])
 
 
 def save_confusion_matrix_heatmap(confusion_mat, output_path):
@@ -74,6 +188,12 @@ def main():
         "subject": preprocess_data(mode="subject"),
         "channel": preprocess_data(mode="channel"),
     }
+
+    # Week 3 Person C: feature subset experiment based on Task 3 findings.
+    run_feature_subset_experiments(
+        subject_df=representations["subject"],
+        output_dir=RESULTS_DIR / "feature_subsets",
+    )
 
     #preprocessed_df = preprocess_data()
     for rep_name, preprocessed_df in representations.items():
