@@ -5,8 +5,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix, recall_score
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
 from dataset import preprocess_data
 from model import SVMModel
@@ -131,6 +133,104 @@ def run_feature_subset_experiments(subject_df, output_dir):
     print("[Person C] Best subset by mean accuracy:", summary_rows[0]["subset"])
 
 
+def run_hyperparameter_tuning(preprocessed_df, rep_name, best_kernel, output_dir):
+    """
+    Week 3 Person D:
+    Run GridSearchCV on the best kernel for this feature representation.
+    """
+    X = preprocessed_df.drop(columns=["Subject", "Group"])
+    y = preprocessed_df["Group"]
+
+    if best_kernel == "linear":
+        param_grid = {
+            "svm__C": [0.01, 0.1, 1, 10, 100],
+        }
+    elif best_kernel == "rbf":
+        param_grid = {
+            "svm__C": [0.01, 0.1, 1, 10, 100],
+            "svm__gamma": ["scale", 0.001, 0.01, 0.1, 1],
+        }
+    elif best_kernel == "poly":
+        param_grid = {
+            "svm__C": [0.01, 0.1, 1, 10, 100],
+            "svm__degree": [2, 3, 4],
+        }
+    else:
+        raise ValueError(f"Unsupported kernel for tuning: {best_kernel}")
+
+    tuning_dir = output_dir / "hyperparameter_tuning"
+    tuning_dir.mkdir(exist_ok=True)
+
+    pipeline = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("svm", SVC(kernel=best_kernel, random_state=42)),
+        ]
+    )
+
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    grid_search = GridSearchCV(
+        estimator=pipeline,
+        param_grid=param_grid,
+        scoring="accuracy",
+        cv=skf,
+        n_jobs=-1,
+        return_train_score=True,
+    )
+
+    grid_search.fit(X, y)
+
+    best_params_path = tuning_dir / "best_params.txt"
+    results_path = tuning_dir / "grid_search_results.csv"
+
+    with open(best_params_path, "w") as f:
+        f.write(f"Representation: {rep_name}\n")
+        f.write(f"Kernel: {best_kernel}\n")
+        f.write(f"Best Mean Accuracy: {round(float(grid_search.best_score_), 4)}\n")
+        f.write("Best Parameters:\n")
+        for key, value in grid_search.best_params_.items():
+            f.write(f"{key}: {value}\n")
+
+    rows = []
+    cv_results = grid_search.cv_results_
+    for i in range(len(cv_results["params"])):
+        rows.append(
+            {
+                "rank_test_score": int(cv_results["rank_test_score"][i]),
+                "mean_test_score": round(float(cv_results["mean_test_score"][i]), 4),
+                "std_test_score": round(float(cv_results["std_test_score"][i]), 4),
+                "mean_train_score": round(float(cv_results["mean_train_score"][i]), 4),
+                "std_train_score": round(float(cv_results["std_train_score"][i]), 4),
+                "params": cv_results["params"][i],
+            }
+        )
+
+    rows.sort(key=lambda row: (row["rank_test_score"], -row["mean_test_score"]))
+
+    with open(results_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "rank_test_score",
+                "mean_test_score",
+                "std_test_score",
+                "mean_train_score",
+                "std_train_score",
+                "params",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\n[Person D] Hyperparameter tuning for {rep_name}")
+    print("Best kernel:", best_kernel)
+    print("Best mean accuracy:", round(float(grid_search.best_score_), 4))
+    print("Best params:", grid_search.best_params_)
+    print("Saved:", best_params_path)
+    print("Saved:", results_path)
+
+
 def save_confusion_matrix_heatmap(confusion_mat, output_path):
     """
     Saves the confusion matrix as a heatmap image.
@@ -212,6 +312,7 @@ def main():
         best_config = {
             "config_num": 0,
             "accuracy": 0.0,
+            "kernel": None,
         }
 
         # Hyperparameter training loop
@@ -329,11 +430,19 @@ def main():
             if np.mean(fold_accuracies) > best_config["accuracy"]:
                 best_config["accuracy"] = np.mean(fold_accuracies)
                 best_config["config_num"] = i
+                best_config["kernel"] = kernel
 
         #print("\nBest Hyperparameter Configuration:")
         #print(f"Config {best_config['config_num']} with Mean Accuracy: {round(best_config['accuracy'], 4)}")
         print(f"\nBest for {rep_name}: Config {best_config['config_num']} "
                 f"(Accuracy={round(best_config['accuracy'], 4)})")
+
+        run_hyperparameter_tuning(
+            preprocessed_df=preprocessed_df,
+            rep_name=rep_name,
+            best_kernel=best_config["kernel"],
+            output_dir=rep_dir,
+        )
 
         #checking if pivot worked
         #print(preprocessed_df.shape)
