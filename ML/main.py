@@ -4,11 +4,9 @@ import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from sklearn.metrics import classification_report, confusion_matrix, recall_score
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import classification_report, confusion_matrix, recall_score, accuracy_score
+from sklearn.model_selection import StratifiedKFold, train_test_split, ParameterGrid
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 
 from dataset import preprocess_data
 from model import SVMModel
@@ -133,102 +131,144 @@ def run_feature_subset_experiments(subject_df, output_dir):
     print("[Person C] Best subset by mean accuracy:", summary_rows[0]["subset"])
 
 
-def run_hyperparameter_tuning(preprocessed_df, rep_name, best_kernel, output_dir):
-    """
-    Week 3 Person D:
-    Run GridSearchCV on the best kernel for this feature representation.
-    """
-    X = preprocessed_df.drop(columns=["Subject", "Group"])
-    y = preprocessed_df["Group"]
+def run_hyperparameter_tuning(X, y, output_dir):
+    param_grid = [
+        {
+            "kernel": ["linear"],
+            "C": [0.01, 0.1, 1, 10, 100],
+        },
+        {
+            "kernel": ["rbf"],
+            "C": [0.01, 0.1, 1, 10, 100],
+            "gamma": ["scale", 0.001, 0.01, 0.1, 1],
+        },
+        {
+            "kernel": ["poly"],
+            "C": [0.01, 0.1, 1, 10, 100],
+            "degree": [2, 3, 4],
+        },
+    ]
 
-    if best_kernel == "linear":
-        param_grid = {
-            "svm__C": [0.01, 0.1, 1, 10, 100],
-        }
-    elif best_kernel == "rbf":
-        param_grid = {
-            "svm__C": [0.01, 0.1, 1, 10, 100],
-            "svm__gamma": ["scale", 0.001, 0.01, 0.1, 1],
-        }
-    elif best_kernel == "poly":
-        param_grid = {
-            "svm__C": [0.01, 0.1, 1, 10, 100],
-            "svm__degree": [2, 3, 4],
-        }
-    else:
-        raise ValueError(f"Unsupported kernel for tuning: {best_kernel}")
+    best_config = {
+        "config_num": 0,
+        "accuracy": 0.0,
+        "params": None
+    }
 
-    tuning_dir = output_dir / "hyperparameter_tuning"
-    tuning_dir.mkdir(exist_ok=True)
+    for i, params in enumerate(ParameterGrid(param_grid)):
+        kernel = params["kernel"]
+        C = params["C"]
+        gamma = params.get("gamma", "scale")
+        degree = params.get("degree", 3)
 
-    pipeline = Pipeline(
-        [
-            ("scaler", StandardScaler()),
-            ("svm", SVC(kernel=best_kernel, random_state=42)),
-        ]
-    )
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        fold_accuracies = []
+        fold_ad_sensitivities = []
 
-    grid_search = GridSearchCV(
-        estimator=pipeline,
-        param_grid=param_grid,
-        scoring="accuracy",
-        cv=skf,
-        n_jobs=-1,
-        return_train_score=True,
-    )
+        # Store all predictions across folds for final plots
+        all_y_true = []
+        all_y_pred = []
 
-    grid_search.fit(X, y)
+        for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+            print(f"Beginning fold {fold}")
+            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+            y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-    best_params_path = tuning_dir / "best_params.txt"
-    results_path = tuning_dir / "grid_search_results.csv"
+            # Scale features
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(X_train)
+            X_test_scaled = scaler.transform(X_test)
 
-    with open(best_params_path, "w") as f:
-        f.write(f"Representation: {rep_name}\n")
-        f.write(f"Kernel: {best_kernel}\n")
-        f.write(f"Best Mean Accuracy: {round(float(grid_search.best_score_), 4)}\n")
-        f.write("Best Parameters:\n")
-        for key, value in grid_search.best_params_.items():
-            f.write(f"{key}: {value}\n")
+            kernel = params["kernel"]
+            C = params["C"]
+            gamma = params.get("gamma", "scale")
+            degree = params.get("degree", 3)
 
-    rows = []
-    cv_results = grid_search.cv_results_
-    for i in range(len(cv_results["params"])):
-        rows.append(
-            {
-                "rank_test_score": int(cv_results["rank_test_score"][i]),
-                "mean_test_score": round(float(cv_results["mean_test_score"][i]), 4),
-                "std_test_score": round(float(cv_results["std_test_score"][i]), 4),
-                "mean_train_score": round(float(cv_results["mean_train_score"][i]), 4),
-                "std_train_score": round(float(cv_results["std_train_score"][i]), 4),
-                "params": cv_results["params"][i],
-            }
+            # Initialize and train SVM model
+            model = SVMModel(
+                kernel=kernel,
+                C=C,
+                gamma=gamma,
+                degree=degree
+            )
+            model.train(X_train_scaled, y_train)
+            y_pred = model.predict(X_test_scaled)
+
+            accuracy = np.mean(y_pred == y_test)
+            report = classification_report(
+                y_test,
+                y_pred,
+                labels=LABELS,
+                target_names=TARGET_NAMES,
+                zero_division=0,
+            )
+            ad_sensitivity = recall_score(y_test, y_pred, pos_label="A", zero_division=0)
+
+            print(f"\nFold {fold} Accuracy:", round(accuracy, 4))
+            print(f"\nFold {fold} AD Sensitivity (Recall for class 'A'):", round(ad_sensitivity, 4))
+            print(f"\nFold {fold} Confusion Matrix (rows=true, cols=pred) [A, C]:")
+            print(confusion_matrix(y_test, y_pred, labels=LABELS))
+            print(f"\nFold {fold} Classification Report:")
+            print(report)
+
+            fold_accuracies.append(accuracy)
+            fold_ad_sensitivities.append(ad_sensitivity)
+
+            all_y_true.extend(y_test.tolist())
+            all_y_pred.extend(y_pred.tolist())
+        
+        # Make configuration results folder
+        (output_dir  / f"config_{i}").mkdir(exist_ok=True)
+        
+        overall_cm = confusion_matrix(all_y_true, all_y_pred, labels=LABELS)
+        overall_report_text = classification_report(
+            all_y_true,
+            all_y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+        )
+        overall_report_dict = classification_report(
+            all_y_true,
+            all_y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+            output_dict=True,
         )
 
-    rows.sort(key=lambda row: (row["rank_test_score"], -row["mean_test_score"]))
+        cm_plot_path = output_dir / f"config_{i}" / "confusion_matrix_heatmap.png"
+        metrics_plot_path = output_dir  / f"config_{i}" / "classification_metrics_bar_chart.png"
+        classification_report_path = output_dir  / f"config_{i}" / "classification_report.txt"
+        params_path = output_dir  / f"config_{i}" / "model_params.txt"
 
-    with open(results_path, "w", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "rank_test_score",
-                "mean_test_score",
-                "std_test_score",
-                "mean_train_score",
-                "std_train_score",
-                "params",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(rows)
+        save_confusion_matrix_heatmap(overall_cm, cm_plot_path)
+        save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
+        with open(classification_report_path, "w") as f:
+            f.write(overall_report_text)
+        with open(params_path, "w") as f:
+            f.write(str(params))
 
-    print(f"\n[Person D] Hyperparameter tuning for {rep_name}")
-    print("Best kernel:", best_kernel)
-    print("Best mean accuracy:", round(float(grid_search.best_score_), 4))
-    print("Best params:", grid_search.best_params_)
-    print("Saved:", best_params_path)
-    print("Saved:", results_path)
+        print("\nFinal Results")
+        print("Fold Accuracies:", fold_accuracies)
+        print("Mean Accuracy:", np.mean(fold_accuracies))
+        print("Fold AD Sensitivities:", fold_ad_sensitivities)
+        print("Mean AD Sensitivity:", np.mean(fold_ad_sensitivities))
+
+        print("\nOverall Confusion Matrix (all CV predictions):")
+        print(overall_cm)
+
+        print("\nOverall Classification Report:")
+        print(overall_report_text)
+
+        # Update best config based on mean accuracy
+        if np.mean(fold_accuracies) > best_config["accuracy"]:
+            best_config["accuracy"] = np.mean(fold_accuracies)
+            best_config["config_num"] = i
+            best_config["params"] = params
+
+    return best_config
 
 
 def save_confusion_matrix_heatmap(confusion_mat, output_path):
@@ -295,7 +335,6 @@ def main():
         output_dir=RESULTS_DIR / "feature_subsets",
     )
 
-    #preprocessed_df = preprocess_data()
     for rep_name, preprocessed_df in representations.items():
         print(f"Running: {rep_name.upper()} FEATURES")
 
@@ -308,145 +347,81 @@ def main():
         # Labels (A = Alzheimer's, C = Control)
         y = preprocessed_df["Group"]
 
-    # Best hyperparameter configuration
-        best_config = {
-            "config_num": 0,
-            "accuracy": 0.0,
-            "kernel": None,
-        }
-
-        # Hyperparameter training loop
-        for i, kernel in enumerate(['linear', 'rbf', 'poly']):
-            (rep_dir  / f"config_{i}").mkdir(exist_ok=True)
-            # Stratified K-Fold
-            skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-
-            fold_accuracies = []
-            fold_ad_sensitivities = []
-
-            # Store all predictions across folds for final plots
-            all_y_true = []
-            all_y_pred = []
-
-            for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
-                X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-                y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-                # Scale features
-                scaler = StandardScaler()
-                X_train_scaled = scaler.fit_transform(X_train)
-                X_test_scaled = scaler.transform(X_test)
-
-                # Print shapes and class counts
-                #print(f"\n=== Fold {fold} ===")
-                #print("Full dataset shape:", preprocessed_df.shape)
-                #print("Training shape:", X_train_scaled.shape)
-                #print("Testing shape:", X_test_scaled.shape)
-
-                #print("\nTrain groups:")
-                #print(y_train.value_counts())
-
-                #print("\nTest groups:")
-                #print(y_test.value_counts())
-
-                # Initialize and train base linear SVM model
-                model = SVMModel(kernel=kernel)
-                model.train(X_train_scaled, y_train)
-                y_pred = model.predict(X_test_scaled)
-
-                # Person C: full evaluation
-                accuracy = np.mean(y_pred == y_test)
-                cm = confusion_matrix(y_test, y_pred, labels=LABELS)
-                report = classification_report(
-                    y_test,
-                    y_pred,
-                    labels=LABELS,
-                    target_names=TARGET_NAMES,
-                    zero_division=0,
-                )
-                ad_sensitivity = recall_score(y_test, y_pred, pos_label="A", zero_division=0)
-
-                #print("\nAccuracy:", round(accuracy, 4))
-                #print("Confusion Matrix (rows=true, cols=pred) [A, C]:")
-                #print("\nClassification Report:")
-                #print(report)
-                #print("AD Sensitivity (Recall for class 'A'):", round(ad_sensitivity, 4))
-
-                fold_accuracies.append(accuracy)
-                fold_ad_sensitivities.append(ad_sensitivity)
-
-                all_y_true.extend(y_test.tolist())
-                all_y_pred.extend(y_pred.tolist())
-
-            overall_cm = confusion_matrix(all_y_true, all_y_pred, labels=LABELS)
-            overall_report_text = classification_report(
-                all_y_true,
-                all_y_pred,
-                labels=LABELS,
-                target_names=TARGET_NAMES,
-                zero_division=0,
-            )
-            overall_report_dict = classification_report(
-                all_y_true,
-                all_y_pred,
-                labels=LABELS,
-                target_names=TARGET_NAMES,
-                zero_division=0,
-                output_dict=True,
-            )
-
-            cm_plot_path = rep_dir / f"config_{i}" / "confusion_matrix_heatmap.png"
-            metrics_plot_path = rep_dir  / f"config_{i}" / "classification_metrics_bar_chart.png"
-            classification_report_path = rep_dir  / f"config_{i}" / "classification_report.txt"
-            params_path = rep_dir  / f"config_{i}" / "model_params.txt"
-
-            save_confusion_matrix_heatmap(overall_cm, cm_plot_path)
-            save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
-            with open(classification_report_path, "w") as f:
-                f.write(overall_report_text)
-            with open(params_path, "w") as f:
-                f.write(f"Kernel: {kernel}")
-            # Change this to include other hyperparameters when full hyperparameter tuning is implemented
-            #f.write(f"Kernel: {kernel}\nC: {C}\nGamma: {gamma}\nDegree: {degree}") 
-
-            print("\nFinal Results")
-            print("Fold Accuracies:", fold_accuracies)
-            print("Mean Accuracy:", np.mean(fold_accuracies))
-            print("Fold AD Sensitivities:", fold_ad_sensitivities)
-            print("Mean AD Sensitivity:", np.mean(fold_ad_sensitivities))
-
-            print("\nOverall Confusion Matrix (all CV predictions):")
-            print(overall_cm)
-
-            print("\nOverall Classification Report:")
-            print(overall_report_text)
-
-            print("\nSaved files:")
-            print(cm_plot_path)
-            print(metrics_plot_path)
-            print(classification_report_path)
-
-            # Update best config based on mean accuracy
-            if np.mean(fold_accuracies) > best_config["accuracy"]:
-                best_config["accuracy"] = np.mean(fold_accuracies)
-                best_config["config_num"] = i
-                best_config["kernel"] = kernel
-
-        #print("\nBest Hyperparameter Configuration:")
-        #print(f"Config {best_config['config_num']} with Mean Accuracy: {round(best_config['accuracy'], 4)}")
-        print(f"\nBest for {rep_name}: Config {best_config['config_num']} "
-                f"(Accuracy={round(best_config['accuracy'], 4)})")
-
-        run_hyperparameter_tuning(
-            preprocessed_df=preprocessed_df,
-            rep_name=rep_name,
-            best_kernel=best_config["kernel"],
-            output_dir=rep_dir,
+        # Create final test set for final model evaluation
+        X_train_full, X_test_final, y_train_full, y_test_final = train_test_split(
+            X, y, test_size=0.25, stratify=y, random_state=42
         )
 
-        #checking if pivot worked
-        #print(preprocessed_df.shape)
-        #print(preprocessed_df.columns[:10])
+        best_config = run_hyperparameter_tuning(X_train_full, y_train_full, rep_dir)
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_full)
+        X_test_scaled = scaler.transform(X_test_final)
 
+        params = best_config["params"]
+
+        model_kwargs = {
+            "kernel": params["kernel"],
+            "C": params["C"],
+        }
+
+        if "gamma" in params:
+            model_kwargs["gamma"] = params["gamma"]
+
+        if "degree" in params:
+            model_kwargs["degree"] = params["degree"]
+
+        final_model = SVMModel(**model_kwargs)
+        final_model.train(X_train_scaled, y_train_full)
+
+        y_pred = final_model.predict(X_test_scaled)
+
+        print("\nFINAL TEST RESULTS")
+        print(confusion_matrix(y_test_final, y_pred))
+        print(classification_report(y_test_final, y_pred))
+
+        cm = confusion_matrix(y_test_final, y_pred, labels=LABELS)
+        overall_report_text = classification_report(
+            y_test_final,
+            y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+        )
+        overall_report_dict = classification_report(
+            y_test_final,
+            y_pred,
+            labels=LABELS,
+            target_names=TARGET_NAMES,
+            zero_division=0,
+            output_dict=True,
+        )
+
+        cm_plot_path = rep_dir / "confusion_matrix_heatmap.png"
+        metrics_plot_path = rep_dir / "classification_metrics_bar_chart.png"
+        classification_report_path = rep_dir / "classification_report.txt"
+        params_path = rep_dir / "model_params.txt"
+
+        ad_sensitivity = recall_score(y_test_final, y_pred, pos_label="A", zero_division=0)
+        accuracy = accuracy_score(y_test_final, y_pred)
+
+        save_confusion_matrix_heatmap(cm, cm_plot_path)
+        save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
+        with open(classification_report_path, "w") as f:
+            f.write(overall_report_text)
+        with open(params_path, "w") as f:
+            f.write(str(params))
+
+        print("\nFinal Results")
+        print("Test Set Accuracy:", accuracy)
+
+        print("\nTest SetSensitivity:", ad_sensitivity)
+
+        print("\nTest Set Confusion Matrix (all CV predictions):")
+        print(cm)
+
+        print("\nOverall Classification Report:")
+        print(overall_report_text)
+
+    
 if __name__ == "__main__":
     main()
