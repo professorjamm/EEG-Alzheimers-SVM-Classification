@@ -132,6 +132,8 @@ def run_feature_subset_experiments(subject_df, output_dir):
 
 
 def run_hyperparameter_tuning(X, y, output_dir):
+    results_path = output_dir / "grid_search_results.csv"
+
     param_grid = [
         {
             "kernel": ["linear"],
@@ -155,6 +157,8 @@ def run_hyperparameter_tuning(X, y, output_dir):
         "params": None
     }
 
+    rows = []
+
     for i, params in enumerate(ParameterGrid(param_grid)):
         kernel = params["kernel"]
         C = params["C"]
@@ -164,6 +168,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
         fold_accuracies = []
+        fold_train_accuracies = []
         fold_ad_sensitivities = []
 
         # Store all predictions across folds for final plots
@@ -180,11 +185,6 @@ def run_hyperparameter_tuning(X, y, output_dir):
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
 
-            kernel = params["kernel"]
-            C = params["C"]
-            gamma = params.get("gamma", "scale")
-            degree = params.get("degree", 3)
-
             # Initialize and train SVM model
             model = SVMModel(
                 kernel=kernel,
@@ -194,8 +194,11 @@ def run_hyperparameter_tuning(X, y, output_dir):
             )
             model.train(X_train_scaled, y_train)
             y_pred = model.predict(X_test_scaled)
+            train_pred = model.predict(X_train_scaled)
 
             accuracy = np.mean(y_pred == y_test)
+            train_acc = np.mean(train_pred == y_train)
+
             report = classification_report(
                 y_test,
                 y_pred,
@@ -213,6 +216,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
             print(report)
 
             fold_accuracies.append(accuracy)
+            fold_train_accuracies.append(train_acc)
             fold_ad_sensitivities.append(ad_sensitivity)
 
             all_y_true.extend(y_test.tolist())
@@ -243,6 +247,22 @@ def run_hyperparameter_tuning(X, y, output_dir):
         classification_report_path = output_dir  / f"config_{i}" / "classification_report.txt"
         params_path = output_dir  / f"config_{i}" / "model_params.txt"
 
+        mean_test_score = float(np.mean(fold_accuracies))
+        std_test_score = float(np.std(fold_accuracies))
+        mean_train_score = float(np.mean(fold_train_accuracies))
+        std_train_score = float(np.std(fold_train_accuracies))
+
+        rows.append({
+            "config_num": i,
+            "mean_test_score": round(mean_test_score, 4),
+            "std_test_score": round(std_test_score, 4),
+            "mean_train_score": round(mean_train_score, 4),
+            "std_train_score": round(std_train_score, 4),
+            "mean_ad_sensitivity": round(np.mean(fold_ad_sensitivities), 4),
+            "std_ad_sensitivity": round(np.std(fold_ad_sensitivities), 4),
+            "params": params,
+        })
+
         save_confusion_matrix_heatmap(overall_cm, cm_plot_path)
         save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
         with open(classification_report_path, "w") as f:
@@ -252,7 +272,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
 
         print("\nFinal Results")
         print("Fold Accuracies:", fold_accuracies)
-        print("Mean Accuracy:", np.mean(fold_accuracies))
+        print("Mean Accuracy:", mean_test_score)
         print("Fold AD Sensitivities:", fold_ad_sensitivities)
         print("Mean AD Sensitivity:", np.mean(fold_ad_sensitivities))
 
@@ -263,10 +283,34 @@ def run_hyperparameter_tuning(X, y, output_dir):
         print(overall_report_text)
 
         # Update best config based on mean accuracy
-        if np.mean(fold_accuracies) > best_config["accuracy"]:
-            best_config["accuracy"] = np.mean(fold_accuracies)
+        if mean_test_score > best_config["accuracy"]:
+            best_config["accuracy"] = mean_test_score
             best_config["config_num"] = i
             best_config["params"] = params
+
+    rows.sort(key=lambda row: row["mean_test_score"], reverse=True)
+
+    # Assign ranks manually
+    for rank, row in enumerate(rows, start=1):
+        row["rank_test_score"] = rank
+
+    with open(results_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "config_num",
+                "rank_test_score",
+                "mean_test_score",
+                "std_test_score",
+                "mean_train_score",
+                "std_train_score",
+                "mean_ad_sensitivity",
+                "std_ad_sensitivity",
+                "params",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
 
     return best_config
 
@@ -396,9 +440,9 @@ def main():
             output_dict=True,
         )
 
-        cm_plot_path = rep_dir / "confusion_matrix_heatmap.png"
-        metrics_plot_path = rep_dir / "classification_metrics_bar_chart.png"
-        classification_report_path = rep_dir / "classification_report.txt"
+        cm_plot_path = rep_dir / "test_confusion_matrix_heatmap.png"
+        metrics_plot_path = rep_dir / "test_classification_metrics_bar_chart.png"
+        classification_report_path = rep_dir / "test_classification_report.txt"
         params_path = rep_dir / "model_params.txt"
 
         ad_sensitivity = recall_score(y_test_final, y_pred, pos_label="A", zero_division=0)
@@ -408,13 +452,14 @@ def main():
         save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
         with open(classification_report_path, "w") as f:
             f.write(overall_report_text)
+            f.write(f"\nAD Sensitivity (Recall for class 'A'): {round(ad_sensitivity, 4)}\n")
         with open(params_path, "w") as f:
             f.write(str(params))
 
         print("\nFinal Results")
         print("Test Set Accuracy:", accuracy)
 
-        print("\nTest SetSensitivity:", ad_sensitivity)
+        print("\nTest Set AD Sensitivity:", ad_sensitivity)
 
         print("\nTest Set Confusion Matrix (all CV predictions):")
         print(cm)
