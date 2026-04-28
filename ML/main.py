@@ -461,7 +461,7 @@ def main():
 
         print("\nTest Set AD Sensitivity:", ad_sensitivity)
 
-        print("\nTest Set Confusion Matrix (all CV predictions):")
+        print("\nTest Set Confusion Matrix:")
         print(cm)
 
         print("\nOverall Classification Report:")
