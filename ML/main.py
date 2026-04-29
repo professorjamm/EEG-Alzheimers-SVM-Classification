@@ -129,6 +129,7 @@ def run_feature_subset_experiments(subject_df, output_dir):
 
     print("\n[Person C] Feature subset comparison saved:", summary_path)
     print("[Person C] Best subset by mean accuracy:", summary_rows[0]["subset"])
+    return summary_rows
 
 
 def run_hyperparameter_tuning(X, y, output_dir):
@@ -254,6 +255,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
 
         rows.append({
             "config_num": i,
+            "kernel": kernel,
             "mean_test_score": round(mean_test_score, 4),
             "std_test_score": round(std_test_score, 4),
             "mean_train_score": round(mean_train_score, 4),
@@ -300,6 +302,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
             fieldnames=[
                 "config_num",
                 "rank_test_score",
+                "kernel",
                 "mean_test_score",
                 "std_test_score",
                 "mean_train_score",
@@ -312,7 +315,7 @@ def run_hyperparameter_tuning(X, y, output_dir):
         writer.writeheader()
         writer.writerows(rows)
 
-    return best_config
+    return best_config, rows
 
 
 def save_confusion_matrix_heatmap(confusion_mat, output_path):
@@ -364,8 +367,98 @@ def save_metrics_bar_chart(report_dict, output_path):
     plt.close()
 
 
+def save_kernel_comparison_chart(kernel_rows, output_path, title):
+    """
+    Saves a chart comparing kernel performance.
+    """
+    kernels = [row["kernel"].upper() for row in kernel_rows]
+    accuracies = [row["mean_test_score"] for row in kernel_rows]
+    sensitivities = [row["mean_ad_sensitivity"] for row in kernel_rows]
+
+    x = np.arange(len(kernels))
+    width = 0.35
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(x - width / 2, accuracies, width, label="Mean Accuracy")
+    plt.bar(x + width / 2, sensitivities, width, label="Mean AD Sensitivity")
+    plt.xticks(x, kernels)
+    plt.ylim(0, 1)
+    plt.ylabel("Score")
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def save_feature_subset_comparison_chart(summary_rows, output_path):
+    """
+    Saves a chart comparing feature subset performance.
+    """
+    subset_labels = [row["subset"].replace("_", "\n") for row in summary_rows]
+    accuracies = [row["mean_accuracy"] for row in summary_rows]
+    sensitivities = [row["mean_ad_sensitivity"] for row in summary_rows]
+
+    x = np.arange(len(subset_labels))
+    width = 0.35
+
+    plt.figure(figsize=(8, 5))
+    plt.bar(x - width / 2, accuracies, width, label="Mean Accuracy")
+    plt.bar(x + width / 2, sensitivities, width, label="Mean AD Sensitivity")
+    plt.xticks(x, subset_labels)
+    plt.ylim(0, 1)
+    plt.ylabel("Score")
+    plt.title("Feature Subset Comparison")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def save_representation_comparison_chart(rep_rows, output_path):
+    """
+    Saves a chart comparing subject vs channel representations.
+    """
+    labels = [row["representation"].title() for row in rep_rows]
+    accuracies = [row["accuracy"] for row in rep_rows]
+    sensitivities = [row["ad_sensitivity"] for row in rep_rows]
+
+    x = np.arange(len(labels))
+    width = 0.35
+
+    plt.figure(figsize=(7, 5))
+    plt.bar(x - width / 2, accuracies, width, label="Test Accuracy")
+    plt.bar(x + width / 2, sensitivities, width, label="AD Sensitivity")
+    plt.xticks(x, labels)
+    plt.ylim(0, 1)
+    plt.ylabel("Score")
+    plt.title("Feature Representation Comparison")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def get_best_row_per_kernel(rows):
+    best_rows = {}
+
+    for row in rows:
+        kernel = row["kernel"]
+        if kernel not in best_rows or row["mean_test_score"] > best_rows[kernel]["mean_test_score"]:
+            best_rows[kernel] = row
+
+    ordered_rows = []
+    for kernel_name in ["linear", "rbf", "poly"]:
+        if kernel_name in best_rows:
+            ordered_rows.append(best_rows[kernel_name])
+
+    return ordered_rows
+
+
 def main():
     RESULTS_DIR.mkdir(exist_ok=True)
+    final_visualizations_dir = RESULTS_DIR / "final_visualizations"
+    final_visualizations_dir.mkdir(exist_ok=True)
 
     # Load processed dataset
     representations = {
@@ -374,10 +467,23 @@ def main():
     }
 
     # Week 3 Person C: feature subset experiment based on Task 3 findings.
-    run_feature_subset_experiments(
+    feature_subset_rows = run_feature_subset_experiments(
         subject_df=representations["subject"],
         output_dir=RESULTS_DIR / "feature_subsets",
     )
+
+    save_feature_subset_comparison_chart(
+        feature_subset_rows,
+        final_visualizations_dir / "feature_subset_comparison_chart.png",
+    )
+
+    representation_rows = []
+    best_final_model = {
+        "accuracy": -1,
+        "representation": None,
+        "confusion_matrix": None,
+        "report_dict": None,
+    }
 
     for rep_name, preprocessed_df in representations.items():
         print(f"Running: {rep_name.upper()} FEATURES")
@@ -396,7 +502,7 @@ def main():
             X, y, test_size=0.25, stratify=y, random_state=42
         )
 
-        best_config = run_hyperparameter_tuning(X_train_full, y_train_full, rep_dir)
+        best_config, tuning_rows = run_hyperparameter_tuning(X_train_full, y_train_full, rep_dir)
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train_full)
         X_test_scaled = scaler.transform(X_test_final)
@@ -444,9 +550,22 @@ def main():
         metrics_plot_path = rep_dir / "test_classification_metrics_bar_chart.png"
         classification_report_path = rep_dir / "test_classification_report.txt"
         params_path = rep_dir / "model_params.txt"
+        kernel_chart_path = rep_dir / "kernel_comparison_chart.png"
 
         ad_sensitivity = recall_score(y_test_final, y_pred, pos_label="A", zero_division=0)
         accuracy = accuracy_score(y_test_final, y_pred)
+
+        best_kernel_rows = get_best_row_per_kernel(tuning_rows)
+        save_kernel_comparison_chart(
+            best_kernel_rows,
+            kernel_chart_path,
+            f"Kernel Comparison ({rep_name.title()} Features)",
+        )
+        save_kernel_comparison_chart(
+            best_kernel_rows,
+            final_visualizations_dir / f"{rep_name}_kernel_comparison_chart.png",
+            f"Kernel Comparison ({rep_name.title()} Features)",
+        )
 
         save_confusion_matrix_heatmap(cm, cm_plot_path)
         save_metrics_bar_chart(overall_report_dict, metrics_plot_path)
@@ -467,6 +586,44 @@ def main():
         print("\nOverall Classification Report:")
         print(overall_report_text)
 
-    
+        print("\nSaved files:")
+        print(cm_plot_path)
+        print(metrics_plot_path)
+        print(classification_report_path)
+        print(kernel_chart_path)
+
+        representation_rows.append({
+            "representation": rep_name,
+            "accuracy": accuracy,
+            "ad_sensitivity": ad_sensitivity,
+        })
+
+        if accuracy > best_final_model["accuracy"]:
+            best_final_model["accuracy"] = accuracy
+            best_final_model["representation"] = rep_name
+            best_final_model["confusion_matrix"] = cm
+            best_final_model["report_dict"] = overall_report_dict
+
+    save_representation_comparison_chart(
+        representation_rows,
+        final_visualizations_dir / "representation_comparison_chart.png",
+    )
+
+    if best_final_model["confusion_matrix"] is not None:
+        save_confusion_matrix_heatmap(
+            best_final_model["confusion_matrix"],
+            final_visualizations_dir / "best_final_model_confusion_matrix_heatmap.png",
+        )
+        save_metrics_bar_chart(
+            best_final_model["report_dict"],
+            final_visualizations_dir / "best_final_model_classification_metrics_bar_chart.png",
+        )
+
+        print("\nBest final model representation:", best_final_model["representation"])
+        print("Best final model accuracy:", best_final_model["accuracy"])
+        print("Saved:", final_visualizations_dir / "best_final_model_confusion_matrix_heatmap.png")
+        print("Saved:", final_visualizations_dir / "best_final_model_classification_metrics_bar_chart.png")
+
+
 if __name__ == "__main__":
     main()
